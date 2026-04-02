@@ -1,5 +1,4 @@
 torch>=1.9.0
-autoattack
 robustbench
 dalle2_pytorch
 torchvision
@@ -10,3 +9,8 @@ huggingface_hub
 sentencepiece
 protobuf
 timm
+einops
+einops-exts
+transformers
+wandb
+matplotlib

@@ -9,7 +9,6 @@ import torch
 import torch.nn.functional as F
 from torchvision.transforms import Resize
 from torchvision import transforms
-from open_flamingo.eval.classification_utils import IMAGENET_1K_CLASS_ID_TO_LABEL
 import wandb
 import argparse
 from robustbench.data import load_clean_dataset, load_cifar10c
@@ -60,6 +59,7 @@ parser.add_argument('--blackbox_only', type=str2bool, default=False, help='Run b
 parser.add_argument('--save_images', type=str2bool, default=False, help='Save images during benchmarking')
 parser.add_argument('--wandb', type=str2bool, default=True, help='Use Weights & Biases for logging')
 parser.add_argument('--devices', type=str, default='', help='Device IDs for CUDA')
+parser.add_argument('--cpu', type=str2bool, default=False, help='Use CPU instead of CUDA')
 
 
 CIFAR10_LABELS = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
@@ -261,16 +261,21 @@ if __name__ == '__main__':
 			time.sleep(1)
 			print('retrying..', file=sys.stderr)
 
-	if args.devices != '':
-		# set cuda visible devices
-		os.environ["CUDA_VISIBLE_DEVICES"] = args.devices
-	main_device = 0
-	device = torch.device(main_device)
-	num_gpus = torch.cuda.device_count()
-	if num_gpus > 1:
-		print(f"Number of GPUs available: {num_gpus}")
+	if args.cpu:
+		device = torch.device('cpu')
+		main_device = device
+		num_gpus = 0
+		print("Running on CPU.")
 	else:
-		print("No multiple GPUs available.")
+		if args.devices != '':
+			os.environ["CUDA_VISIBLE_DEVICES"] = args.devices
+		main_device = torch.device(0)
+		device = main_device
+		num_gpus = torch.cuda.device_count()
+		if num_gpus > 1:
+			print(f"Number of GPUs available: {num_gpus}")
+		else:
+			print("No multiple GPUs available.")
 
 	if not args.blackbox_only:
 		attacks_to_run = ['apgd-ce', 'apgd-t']
@@ -325,14 +330,16 @@ if __name__ == '__main__':
 		# Get text label embeddings of all ImageNet classes
 		if not args.template == 'ensemble':
 			if args.template == 'std':
-				template = 'This is a photo of a {}'
+				template = 'This is a photo of a {c}'
+				templates = [template]
 			else:
 				raise ValueError(f'Unknown template: {args.template}')
 			print(f'template: {template}')
 			if args.dataset == 'imagenet':
-				texts = [template.format(c) for c in IMAGENET_1K_CLASS_ID_TO_LABEL.values()]
+				from open_flamingo.eval.classification_utils import IMAGENET_1K_CLASS_ID_TO_LABEL
+				texts = [template.format(c=c) for c in IMAGENET_1K_CLASS_ID_TO_LABEL.values()]
 			elif args.dataset == 'cifar10':
-				texts = [template.format(c) for c in CIFAR10_LABELS]
+				texts = [template.format(c=c) for c in CIFAR10_LABELS]
 			text_tokens = open_clip.tokenize(texts)
 			embedding_text_labels_norm = []
 			text_batches = [text_tokens[:500], text_tokens[500:]] if args.dataset == 'imagenet' else [text_tokens]
@@ -347,6 +354,7 @@ if __name__ == '__main__':
 			embedding_text_labels_norm = torch.cat(embedding_text_labels_norm).T.to(main_device)
 		else:
 			assert args.dataset == 'imagenet', 'ensemble only implemented for imagenet'
+			from open_flamingo.eval.classification_utils import IMAGENET_1K_CLASS_ID_TO_LABEL
 			with open('CLIP_eval/zeroshot-templates.json', 'r') as f:
 					templates = json.load(f)
 			templates = templates['imagenet1k']
@@ -383,7 +391,7 @@ if __name__ == '__main__':
 
 	if num_gpus > 1:
 			model = torch.nn.DataParallel(model)
-	model = model.cuda()
+	model = model.to(device)
 	model.eval()
 
 	model_name = None

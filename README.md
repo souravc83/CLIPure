@@ -26,7 +26,14 @@ The code is achieved with Python 3.7.13. To install the required packages, run:
 
   ```bash
 
+  python3 -m venv .venv
+  source .venv/bin/activate
+  python -m pip install --upgrade pip
+
+  pip install git+https://github.com/fra31/auto-attack.git
   pip install -r requirements.txt
+
+  deactivate
 
   ```
 
