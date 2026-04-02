@@ -12,8 +12,8 @@ from torchvision import transforms
 from open_flamingo.eval.classification_utils import IMAGENET_1K_CLASS_ID_TO_LABEL
 import wandb
 import argparse
-from robustbench import benchmark
-from robustbench.data import load_clean_dataset
+from robustbench.data import load_clean_dataset, load_cifar10c
+from robustbench.utils import clean_accuracy
 from autoattack import AutoAttack
 from robustbench.model_zoo.enums import BenchmarkDataset
 from CLIP_eval.eval_utils import compute_accuracy_no_dataloader, load_clip_model
@@ -396,46 +396,28 @@ if __name__ == '__main__':
 	)
 
 	start = time.time()
-	if args.full_benchmark:
-		clean_acc, robust_acc = benchmark(
-			model, model_name=model_name, n_examples=n_samples,
-			batch_size=args.batch_size,
-			dataset=args.dataset, data_dir=data_dir,
-			threat_model=args.norm.replace('l', 'L'), eps=eps,
-			preprocessing=preprocessor_without_normalize,
-			device=device, to_disk=False
-		)
-		clean_acc *= 100
-		robust_acc *= 100
-		duration = time.time() - start
-		print(f"[Model] {pretrained}")
-		print(
-			f"[Clean Acc] {clean_acc:.2f}% [Robust Acc] {robust_acc:.2f}% [Duration] {duration / 60:.2f}m"
-			)
-		if run_train is not None:
-			del api, run_train
-			api = wandb.Api()
-			run_train = api.run(f'{wandb_user}/{wandb_project}/{args.wandb_id}')
-			eps_descr = str(int(eps * 255)) if args.norm == 'linf' else str(eps)
-			run_train.summary.update({f'rb/acc-{dataset_short}': clean_acc})
-			run_train.summary.update({f'rb/racc-{dataset_short}-{args.norm}-{eps_descr}': robust_acc})
-			run_train.update()
-	else:
-		x_test, y_test = load_clean_dataset(
-			BenchmarkDataset(args.dataset), n_examples=n_samples, data_dir=data_dir,
-			prepr=preprocessor_without_normalize,)
-			
-		for iter in [10]:
-			for lr in [30.]:
-				print('iter = {}, lr = {}'.format(iter, lr))
-				model.iter = iter
-				model.step_size = lr
-				adversary = AutoAttack(
-					model, norm=args.norm.replace('l', 'L'), eps=eps, version='custom', attacks_to_run=attacks_to_run,
-					alpha=args.alpha, verbose=True
-				)
+	x_corrupt, y_corrupt = load_cifar10c(
+		n_examples=n_samples,
+		severity=5,
+		data_dir=data_dir,
+		corruptions=['gaussian_noise'],
+	)
 
-				x_adv, y_adv = adversary.run_standard_evaluation(x_test, y_test, bs=args.batch_size, return_labels=True)  # y_adv are preds on x_adv
+	corrupt_acc = clean_accuracy(
+		model, x_corrupt, y_corrupt,
+		batch_size=args.batch_size, device=device,
+	)
+	corrupt_acc *= 100
+	duration = time.time() - start
+	print(f"[Model] {pretrained}")
+	print(f"[Gaussian Noise S5 Acc] {corrupt_acc:.2f}% [Duration] {duration / 60:.2f}m")
+
+	if run_train is not None:
+		del api, run_train
+		api = wandb.Api()
+		run_train = api.run(f'{wandb_user}/{wandb_project}/{args.wandb_id}')
+		run_train.summary.update({f'c10c/acc-gaussian_noise-s5': corrupt_acc})
+		run_train.update()
 
 	run_eval.finish()
 
