@@ -122,6 +122,7 @@ class ClassificationModel(torch.nn.Module):
 
 			self.iter = 10
 			self.step_size = 30.
+			self._printed_purify_debug = False
 
 	def find_layer(self,  layer):
 		modules = dict([*self.clip.named_modules()])
@@ -159,6 +160,14 @@ class ClassificationModel(torch.nn.Module):
 	def purify_zi(self, img_emb, iter=10, step_size=10.):
 			step_size_u = step_size
 			batch, device = img_emb.shape[0], img_emb.device
+			if iter == 0:
+				if not getattr(self, "_printed_purify_iter0", False):
+					print(
+						"[purify_zi] iter=0: skipping purification loop (embedding unchanged).",
+						flush=True,
+					)
+					self._printed_purify_iter0 = True
+				return img_emb
 			if not img_emb.requires_grad:
 				img_emb.requires_grad = True  # 确保图像嵌入需要梯度
 
@@ -196,7 +205,20 @@ class ClassificationModel(torch.nn.Module):
 			
 			with torch.enable_grad():
 				embedding_norm_, _ = self.embed_image(vision)
+				emb_before = embedding_norm_.detach().clone()
 				embedding_norm_ = self.purify_zi(embedding_norm_, iter=self.iter, step_size=self.step_size)
+			if not self._printed_purify_debug:
+				with torch.no_grad():
+					delta = (embedding_norm_.float() - emb_before.float())
+					delta_norm_mean = delta.norm(dim=1).mean().item()
+					delta_norm_max = delta.norm(dim=1).max().item()
+				print(
+					f"[purify debug] iter={self.iter} step_size={self.step_size} | "
+					f"mean ||emb_after - emb_before||_2 per image={delta_norm_mean:.6f}, "
+					f"max={delta_norm_max:.6f}",
+					flush=True,
+				)
+				self._printed_purify_debug = True
 			logits = embedding_norm_ @ self.text_embedding.to(embedding_norm_.dtype)
 			
 			if self.logit_scale:
@@ -350,7 +372,9 @@ if __name__ == '__main__':
 				embedding_text_labels_norm.append(
 					model.encode_text(el.to(main_device), normalize=True).detach().cpu()
 				)
-			model.cpu()
+			# Keep model on the selected runtime device (CPU or GPU). Moving to CPU here
+			# breaks ClassificationModel init on GPU because token indices are on CUDA.
+			model = model.to(device)
 			embedding_text_labels_norm = torch.cat(embedding_text_labels_norm).T.to(main_device)
 		else:
 			assert args.dataset == 'imagenet', 'ensemble only implemented for imagenet'
